@@ -68,21 +68,25 @@ def setup_logging(log_level: str, name: str = None):
             level=log_level.upper(),
             format=format,
             datefmt="%Y-%m-%d %H:%M:%S",
+            force=True,
         )
     except ValueError:
         raise ValueError(f"'{log_level}' is not a valid logging Level!")
 
 
 def worker_process(
-    path: str,
+    name: str,
+    image: Image.Image,
     log_level: str,
     debug: bool = False,
     use_hough: bool = True,
 ):
-    setup_logging(log_level, os.path.basename(path))
-    logging.info("New worker started.")
+    setup_logging(log_level, name)
 
-    return convert_single_image(path, debug, True, use_hough)
+    deskewed = deskew_image(image, True, use_hough, debug=debug)
+    logging.info("Finished deskewing image.")
+
+    return deskewed
 
 
 def get_tesseract_path() -> str:
@@ -435,41 +439,36 @@ def save_pil_images_as_pdf(
 
         # Save first image and append the rest
         pil_images[0].save(output_pdf_path, save_all=True, append_images=pil_images[1:])
-        logging.info(f"Saved PDF: {output_pdf_path}")
+        logging.info("Saved PDF! 🎉🎉")
+        logging.info(output_pdf_path)
     except Exception as e:
         logging.error(f"Failed to save PDF {output_pdf_path}: {e}")
 
 
-def convert_single_image(
-    image_path: str, debug: bool, use_tesseract: bool, use_hough: bool
-):
+def extract_all_images(image_paths: List[str]):
     """
-    Convert multi-frame image file to PDF.
-    Allows for optional inversion and deskewing methods.
+    Obtains all of the images (including) pages of multi-page images or all frames of animated images.
     """
+    images = []
+    for path in image_paths:
+        if not os.path.isfile(path):
+            logging.error(f"File does not exist: {path}")
+            sys.exit(1)
 
-    if not os.path.isfile(image_path):
-        logging.error(f"File does not exist: {image_path}")
-        return
+        # Read all image frames/pages
+        frames = read_multiframe_image(path)
+        name = os.path.basename(path)
+        if not frames:
+            logging.warning(f"No frames found in {path}. Skipping...")
+            pass
 
-    # Read all image frames/pages
-    pages = read_multiframe_image(image_path)
-    if not pages:
-        logging.warning(f"No pages found in {image_path}. Skipping...")
-        return
+        images.extend([(name, i, frames[i]) for i in range(len(frames))])
 
     # Optionally log image info for debugging
-    for page in pages:
-        log_image_info(page)
+    for image in images:
+        log_image_info(image[2])
 
-    # Deskew each page
-    deskewed_pages = []
-    for page in pages:
-        deskewed = deskew_image(page, use_tesseract, use_hough, debug=debug)
-        deskewed_pages.append(deskewed)
-        logging.info(f"Finished deskewing image {len(deskewed_pages)}/{len(pages)}.")
-
-    return deskewed_pages
+    return images
 
 
 def main():
@@ -493,28 +492,32 @@ def main():
             logging.error(f"Failed to create output directory {args.output_path}: {e}")
             sys.exit(1)
 
+    images_to_process = extract_all_images(args.image_paths)
     logging.info(f"Output PDF: '{output_pdf_name}'")
-    logging.info(f"Image Count: {len(args.image_paths)}")
+    logging.info(f"Image Files: {len(args.image_paths)}")
+    logging.info(f"Image Frames: {len(images_to_process)}")
+    logging.info("Starting conversion process.")
 
     # Use multiprocessing for parallel processing.
-    # TODO: We should change this, to split the images first on the main thread, then have a single array with all the images to convert.
-    resulting_pdf_pages = [None for _ in args.image_paths]
-    with Pool(processes=min(len(args.image_paths), cpu_count())) as pool:
+    process_count = min(len(images_to_process), cpu_count())
+    if args.debug:  # Make debugging easier.
+        process_count = 1
+
+    with Pool(processes=process_count) as pool:
         process_args = [
             (
-                path,
+                f"{image[0]}@{image[1]}",
+                image[2],
                 args.log,
                 args.debug,
                 not args.disable_hough,
             )
-            for path in args.image_paths
+            for image in images_to_process
         ]
         resulting_pdf_pages = pool.starmap(worker_process, process_args)
 
-    logging.info("Finished converting images! 🎉")
     output_pdf_path = os.path.join(output_dir, output_pdf_name)
-    ordered_pdf_pages = [j for i in resulting_pdf_pages for j in i]
-    save_pil_images_as_pdf(ordered_pdf_pages, output_pdf_path, args.resize_factor)
+    save_pil_images_as_pdf(resulting_pdf_pages, output_pdf_path, args.resize_factor)
 
 
 if __name__ == "__main__":
