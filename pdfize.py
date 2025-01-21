@@ -81,7 +81,7 @@ def parse_arguments():
 
 def get_tesseract_path() -> str:
     """Return the path to the Tesseract executable."""
-    # Assuming Tesseract is in PATH
+
     return "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
 
 
@@ -98,17 +98,14 @@ def read_multiframe_image(file_path: str) -> List[Image.Image]:
     try:
         i = 0
         while True:
-            image.seek(
-                i
-            )  # Seek frame 'i' (For an image format such as .tif with multiple images, get each individually)
+            # Seek frame 'i' (For image formats like .tif with multiple images, get each individually)
+            image.seek(i)
             extracted_images.append(image.copy())
             i += 1
     except EOFError:
         pass
 
-    logging.debug(
-        f"Extracted {len(extracted_images)} frames from {file_path}."
-    )
+    logging.debug(f"Extracted {len(extracted_images)} frames from {file_path}.")
     return extracted_images
 
 
@@ -126,10 +123,9 @@ def get_skew_angle_tesseract(pil_image: Image.Image) -> float:
     Use Tesseract OCR to determine the skew angle of the image.
     Returns the angle in degrees.
     """
+
     try:
-        osd = pytesseract.image_to_osd(
-            pil_image, lang="lat", output_type=Output.DICT
-        )
+        osd = pytesseract.image_to_osd(pil_image, lang="lat", output_type=Output.DICT)
         angle = osd["orientation"]
         script = osd["script"]
         confidence = osd["orientation_conf"]
@@ -141,9 +137,7 @@ def get_skew_angle_tesseract(pil_image: Image.Image) -> float:
             return None
 
         if confidence < 1:
-            logging.warning(
-                f"Ignoring tesseract as confidence was {str(confidence)}"
-            )
+            logging.warning(f"Ignoring tesseract as confidence was {str(confidence)}")
             return None
 
         match int(angle):
@@ -167,9 +161,10 @@ def get_skew_angle_tesseract(pil_image: Image.Image) -> float:
 
 def has_enough_text(pil_image: Image.Image, min_words=3) -> bool:
     """
-    Return True if Tesseract detects at least `min_words` textual items
-    in this image. Otherwise, likely not enough text to deskew safely.
+    Return True if Tesseract detects at least `min_words` textual items in this image.
+    Otherwise, likely not enough text to deskew safely.
     """
+
     try:
         data = pytesseract.image_to_data(pil_image, output_type=Output.DICT)
         words = [w.strip() for w in data["text"] if w.strip() != ""]
@@ -196,9 +191,7 @@ def is_countour_a_line(contour: cv2.typing.MatLike) -> bool:
 
 
 # Rotate the image to correct the skew
-def rotate_image(
-    image: cv2.typing.MatLike, angle: float
-) -> cv2.typing.MatLike:
+def rotate_image(image: cv2.typing.MatLike, angle: float) -> cv2.typing.MatLike:
     (height, width, *_) = image.shape
     center = (width / 2, height / 2)
 
@@ -287,9 +280,7 @@ def deskew_image(
     # main text block without internal noise
     # CHAIN_APPROX_SIMPLE compresses horizontal, vertical + diagonal segments,
     # reducing the number of points and simplifying contour representation
-    contours, _ = cv2.findContours(
-        thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     # Select the largest contour, typically the primary text block
     # The main text usually occupies the largest area
@@ -314,9 +305,7 @@ def deskew_image(
     ]
 
     if not filtered_contours:
-        logging.warning(
-            "No large enough contours found. Returning original..."
-        )
+        logging.warning("No large enough contours found. Returning original...")
         return pil_image
 
     # Combine all filtered contours into one array of points
@@ -431,9 +420,7 @@ def save_pil_images_as_pdf(
             ]
 
         # Save first image and append the rest
-        pil_images[0].save(
-            output_pdf_path, save_all=True, append_images=pil_images[1:]
-        )
+        pil_images[0].save(output_pdf_path, save_all=True, append_images=pil_images[1:])
         logging.debug(f"Saved PDF: {output_pdf_path}")
     except Exception as e:
         logging.error(f"Failed to save PDF {output_pdf_path}: {e}")
@@ -532,10 +519,7 @@ def main():
             os.makedirs(args.output_dir, exist_ok=True)
             logging.debug(f"Created output directory: {args.output_dir}")
         except Exception as e:
-            logging.error(
-                f"Failed to create output directory {
-                          args.output_dir}: {e}"
-            )
+            logging.error(f"Failed to create output directory {args.output_dir}: {e}")
             sys.exit(1)
 
     convert_images_to_pdf(
