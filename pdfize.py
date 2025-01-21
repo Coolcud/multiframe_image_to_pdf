@@ -14,7 +14,6 @@ from pytesseract import Output
 from tqdm import tqdm
 
 # TODO: All specified tiffs should be put into one final pdf. One program run => One pdf output.
-# TODO: Update image preview to preserve aspect ratio
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -187,7 +186,7 @@ def has_enough_text(pil_image: Image.Image, min_words=3) -> bool:
 
 def debug_show_image(image: cv2.typing.MatLike, resize_image: bool = True):
     if resize_image:
-        image = cv2.resize(image.copy(), (700, 1000))
+        cv2.namedWindow("Debug Preview", cv2.WINDOW_NORMAL)
 
     # We always use 'Debug Preview', so that the windows will
     # open up at the same position as the previously closed Window.
