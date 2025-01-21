@@ -16,11 +16,14 @@ macOS: `source venv/bin/activate`
 
 `pip install -r requirements.txt`
 
+# Install TesseractOCR
+
+Download [here](https://github.com/tesseract-ocr/tesseract/releases)
+
 # Install Latin TrainedData set for TesseractOCR
+
 Download [here](https://github.com/tesseract-ocr/tessdata/blob/main/lat.traineddata)
 
-# Execute shell script
+# Execute program
 
-`./run_converter.sh <output_dir> <image_path1> [<image_path2> ...] [options]`
-
-Example: `./run_converter.sh ./output ./test1.tif ./test2.tiff --invert --verbose --use-hough --resize 0.5`
+`python pdfize.py <output_pdf_dir> <image_path1> [<image_path2> ...] [options]`

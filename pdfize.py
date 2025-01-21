@@ -15,8 +15,6 @@ from tqdm import tqdm
 
 # TODO: All specified tiffs should be put into one final pdf. One program run => One pdf output.
 # TODO: Update image preview to preserve aspect ratio
-# TODO: Improve documentation of the deskew function
-# TODO: Update the readme.
 
 
 def parse_arguments() -> argparse.Namespace:
