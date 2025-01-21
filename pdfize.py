@@ -1,26 +1,28 @@
-import os
-import sys
 import argparse
 import logging
+import logging.handlers
+import os
+import sys
+from multiprocessing import Pool, cpu_count
 from typing import List
-from PIL import Image, ImageOps
+
 import cv2
 import numpy as np
-from multiprocessing import Pool, cpu_count
-from tqdm import tqdm
 import pytesseract
+from PIL import Image, ImageOps
 from pytesseract import Output
+from tqdm import tqdm
 
 # TODO: All specified tiffs should be put into one final pdf. One program run => One pdf output.
 # TODO: Keep debug image preview functionality, but lock it behind a command-line flag.
+# TODO: Update image preview to preserve aspect ratio
 # TODO: Make hough enablement the default, with a flag to --disable_hough.
-# TODO: Better handling of pytesseract installed yes/no.
 # TODO: Improve documentation of the deskew function
 # TODO: Update the readme.
-# TODO: Fix logging issues.
+# TODO: Review command-line flags, which ones should be removed?
 
 
-def parse_arguments():
+def parse_arguments() -> argparse.Namespace:
     """Argument parser for user input."""
 
     parser = argparse.ArgumentParser(
@@ -38,17 +40,15 @@ def parse_arguments():
         help="One or more multi-frame image paths to deskew and convert.",
     )
     parser.add_argument(
+        "--log",
+        type=str,
+        default="INFO",
+        help="Set the logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) Default is INFO.",
+    )
+    parser.add_argument(
         "--invert",
         action="store_true",
         help="Invert the image colors (optional).",
-    )
-    parser.add_argument(
-        "--verbose", action="store_true", help="Enable verbose output."
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug mode for detailed image info.",
     )
     parser.add_argument(
         "--use_hough",
@@ -59,24 +59,41 @@ def parse_arguments():
         "--resize_factor",
         type=float,
         default=1.0,
-        help="Resize factor for images before saving to PDF.",
+        help="Resize factor for images before saving to PDF (e.g. 0.5 for half). Default is 1.0 (no resize).",
     )
 
     return parser.parse_args()
 
 
-# def setup_logging(verbose: bool, debug: bool):
-#     """Log information for user based on preferences."""
+def setup_logging(log_level: str, name: str = None):
+    """Log information for user based on preferences."""
 
-#     logging.basicConfig(
-#         level=logging.DEBUG,
-#         format="%(asctime)s - %(levelname)s - %(message)s",
-#         datefmt="%Y-%m-%d %H:%M:%S",
-#     )
+    try:
+        format = "[%(asctime)s|%(levelname)s]: %(message)s"
+        if str is not None:
+            format = f"[%(asctime)s|%(levelname)s|{name}]: %(message)s"
 
-#     logging.debug(
-#         f"Logging level set to: {logging.getLogger().get}"
-#     )
+        logging.basicConfig(
+            level=log_level.upper(),
+            format=format,
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    except ValueError:
+        raise ValueError(f"'{log_level}' is not a valid logging Level!")
+
+
+def worker_process(
+    path: str,
+    log_level: str,
+    output_dir: str,
+    invert: bool = False,
+    use_hough: bool = False,
+    resize_factor: float = 1.0,
+):
+    setup_logging(log_level, os.path.basename(path))
+    logging.info("New worker started.")
+
+    convert_single_image(path, output_dir, invert, True, use_hough, resize_factor)
 
 
 def get_tesseract_path() -> str:
@@ -105,7 +122,7 @@ def read_multiframe_image(file_path: str) -> List[Image.Image]:
     except EOFError:
         pass
 
-    logging.debug(f"Extracted {len(extracted_images)} frames from {file_path}.")
+    logging.info(f"Extracted {len(extracted_images)} image frames.")
     return extracted_images
 
 
@@ -129,8 +146,7 @@ def get_skew_angle_tesseract(pil_image: Image.Image) -> float:
         angle = osd["orientation"]
         script = osd["script"]
         confidence = osd["orientation_conf"]
-        logging.debug(f"Found {script} at angle: {angle}, conf: {confidence}")
-        print(osd)
+        logging.info(f"Tesseract found {script} at angle: {angle}, conf: {confidence}")
 
         if script != "Latin":
             logging.warning(f"Ignoring tesseract angle as script was {script}")
@@ -155,7 +171,7 @@ def get_skew_angle_tesseract(pil_image: Image.Image) -> float:
 
         return angle
     except Exception as e:
-        logging.warning(f"Tesseract OCR failed to detect angle: {e}")
+        logging.error(f"Tesseract OCR failed to detect angle: {e}")
         return None
 
 
@@ -170,7 +186,7 @@ def has_enough_text(pil_image: Image.Image, min_words=3) -> bool:
         words = [w.strip() for w in data["text"] if w.strip() != ""]
         return len(words) >= min_words
     except Exception as e:
-        logging.warning(f"Tesseract failed to detect text: {e}")
+        logging.error(f"{e}")
         return False
 
 
@@ -286,7 +302,7 @@ def deskew_image(
     # The main text usually occupies the largest area
     # If no contours are found, return the original image unaltered
     if not contours:
-        logging.debug("No contours found. Returning original image...")
+        logging.warning("No contours found. Returning original image...")
         return pil_image
 
     drawing_image = cv2_image.copy()
@@ -421,7 +437,7 @@ def save_pil_images_as_pdf(
 
         # Save first image and append the rest
         pil_images[0].save(output_pdf_path, save_all=True, append_images=pil_images[1:])
-        logging.debug(f"Saved PDF: {output_pdf_path}")
+        logging.info(f"Saved PDF: {output_pdf_path}")
     except Exception as e:
         logging.error(f"Failed to save PDF {output_pdf_path}: {e}")
 
@@ -462,74 +478,50 @@ def convert_single_image(
         log_image_info(page)
 
     # Deskew each page
-    deskewed_pages = [
-        deskew_image(page, use_tesseract=use_tesseract, use_hough=use_hough)
-        for page in pages
-    ]
+    deskewed_pages = []
+    for page in pages:
+        deskewed = deskew_image(page, use_tesseract=use_tesseract, use_hough=use_hough)
+        deskewed_pages.append(deskewed)
+        logging.info(f"Finished deskewing image {len(deskewed_pages)}/{len(pages)}")
 
     # Save deskewed pages as PDF
     save_pil_images_as_pdf(deskewed_pages, output_pdf_name, resize_factor)
-    logging.info(f"Converted {image_path} to {output_pdf_name}.")
 
 
-def convert_images_to_pdf(
-    image_paths: List[str],
-    output_dir: str,
-    invert: bool = False,
-    use_tesseract: bool = False,
-    use_hough: bool = False,
-    resize_factor: float = 1.0,
-):
-    """
-    Accept a list of file paths and target output dir.
-    Read each file's pages, perform deskew, and save file's pages as PDF.
-    """
+def main():
+    args = parse_arguments()
+    setup_logging(args.log)
+
+    if not os.path.isdir(args.output_dir):
+        try:
+            os.makedirs(args.output_dir, exist_ok=True)
+            logging.info(f"Created output directory: {args.output_dir}")
+        except Exception as e:
+            logging.error(f"Failed to create output directory {args.output_dir}: {e}")
+            sys.exit(1)
 
     # Use multiprocessing for parallel processing
-    with Pool(processes=cpu_count()) as pool:
+    with Pool(processes=min(len(args.image_paths), cpu_count())) as pool:
         args = [
             (
                 path,
-                output_dir,
-                invert,
-                use_tesseract,
-                use_hough,
-                resize_factor,
+                args.log,
+                args.output_dir,
+                args.invert,
+                args.use_hough,
+                args.resize_factor,
             )
-            for path in image_paths
+            for path in args.image_paths
         ]
         list(
             tqdm(
-                pool.starmap(convert_single_image, args),
+                pool.starmap(worker_process, args),
                 total=len(args),
                 desc="Converting multi-frame images",
             )
         )
 
     logging.info("Finished converting images! 🎉")
-
-
-def main():
-    pytesseract.pytesseract.tesseract_cmd = get_tesseract_path()
-    args = parse_arguments()
-    # setup_logging(args.verbose, args.debug)
-
-    if not os.path.isdir(args.output_dir):
-        try:
-            os.makedirs(args.output_dir, exist_ok=True)
-            logging.debug(f"Created output directory: {args.output_dir}")
-        except Exception as e:
-            logging.error(f"Failed to create output directory {args.output_dir}: {e}")
-            sys.exit(1)
-
-    convert_images_to_pdf(
-        image_paths=args.image_paths,
-        output_dir=args.output_dir,
-        invert=args.invert,
-        use_tesseract=True,  # Enable Tesseract-based deskewing
-        use_hough=args.use_hough,
-        resize_factor=args.resize_factor,
-    )
 
 
 if __name__ == "__main__":
