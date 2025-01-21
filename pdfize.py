@@ -11,9 +11,6 @@ import numpy as np
 import pytesseract
 from PIL import Image
 from pytesseract import Output
-from tqdm import tqdm
-
-# TODO: All specified tiffs should be put into one final pdf. One program run => One pdf output.
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -23,9 +20,9 @@ def parse_arguments() -> argparse.Namespace:
         description="Deskew and convert multi-frame images to PDF."
     )
     parser.add_argument(
-        "output_dir",
+        "output_path",
         type=str,
-        help="Directory where the deskewed PDF files will be saved.",
+        help="File path to save the output PDF, directory or file.",
     )
     parser.add_argument(
         "image_paths",
@@ -79,15 +76,13 @@ def setup_logging(log_level: str, name: str = None):
 def worker_process(
     path: str,
     log_level: str,
-    output_dir: str,
     debug: bool = False,
     use_hough: bool = True,
-    resize_factor: float = 1.0,
 ):
     setup_logging(log_level, os.path.basename(path))
     logging.info("New worker started.")
 
-    convert_single_image(path, output_dir, debug, True, use_hough, resize_factor)
+    return convert_single_image(path, debug, True, use_hough)
 
 
 def get_tesseract_path() -> str:
@@ -446,12 +441,7 @@ def save_pil_images_as_pdf(
 
 
 def convert_single_image(
-    image_path: str,
-    output_dir: str,
-    debug: bool,
-    use_tesseract: bool,
-    use_hough: bool,
-    resize_factor: float = 1.0,
+    image_path: str, debug: bool, use_tesseract: bool, use_hough: bool
 ):
     """
     Convert multi-frame image file to PDF.
@@ -461,10 +451,6 @@ def convert_single_image(
     if not os.path.isfile(image_path):
         logging.error(f"File does not exist: {image_path}")
         return
-
-    # Create output PDF path
-    image_file_name = os.path.splitext(os.path.basename(image_path))[0]
-    output_pdf_name = os.path.join(output_dir, f"{image_file_name}.pdf")
 
     # Read all image frames/pages
     pages = read_multiframe_image(image_path)
@@ -481,46 +467,54 @@ def convert_single_image(
     for page in pages:
         deskewed = deskew_image(page, use_tesseract, use_hough, debug=debug)
         deskewed_pages.append(deskewed)
-        logging.info(f"Finished deskewing image {len(deskewed_pages)}/{len(pages)}")
+        logging.info(f"Finished deskewing image {len(deskewed_pages)}/{len(pages)}.")
 
-    # Save deskewed pages as PDF
-    save_pil_images_as_pdf(deskewed_pages, output_pdf_name, resize_factor)
+    return deskewed_pages
 
 
 def main():
     args = parse_arguments()
     setup_logging(args.log)
 
-    if not os.path.isdir(args.output_dir):
+    output_pdf_name = os.path.basename(args.output_path)
+    output_dir = os.path.dirname(args.output_path)
+    if os.path.isdir(args.output_path) or not os.path.splitext(
+        os.path.basename(output_pdf_name)
+    )[-1].lower().endswith("pdf"):
+        output_dir = args.output_path
+        output_pdf_name = f"{os.path.basename(args.image_paths[0])}.pdf"
+
+    # Create output PDF path
+    if not os.path.isdir(output_dir):
+        logging.info(f"Creating output directory: {args.output_path}")
         try:
-            os.makedirs(args.output_dir, exist_ok=True)
-            logging.info(f"Created output directory: {args.output_dir}")
+            os.makedirs(output_dir, exist_ok=True)
         except Exception as e:
-            logging.error(f"Failed to create output directory {args.output_dir}: {e}")
+            logging.error(f"Failed to create output directory {args.output_path}: {e}")
             sys.exit(1)
 
-    # Use multiprocessing for parallel processing
+    logging.info(f"Output PDF: '{output_pdf_name}'")
+    logging.info(f"Image Count: {len(args.image_paths)}")
+
+    # Use multiprocessing for parallel processing.
+    # TODO: We should change this, to split the images first on the main thread, then have a single array with all the images to convert.
+    resulting_pdf_pages = [None for _ in args.image_paths]
     with Pool(processes=min(len(args.image_paths), cpu_count())) as pool:
-        args = [
+        process_args = [
             (
                 path,
                 args.log,
-                args.output_dir,
                 args.debug,
                 not args.disable_hough,
-                args.resize_factor,
             )
             for path in args.image_paths
         ]
-        list(
-            tqdm(
-                pool.starmap(worker_process, args),
-                total=len(args),
-                desc="Converting multi-frame images",
-            )
-        )
+        resulting_pdf_pages = pool.starmap(worker_process, process_args)
 
     logging.info("Finished converting images! 🎉")
+    output_pdf_path = os.path.join(output_dir, output_pdf_name)
+    ordered_pdf_pages = [j for i in resulting_pdf_pages for j in i]
+    save_pil_images_as_pdf(ordered_pdf_pages, output_pdf_path, args.resize_factor)
 
 
 if __name__ == "__main__":
