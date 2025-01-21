@@ -15,9 +15,9 @@ from tqdm import tqdm
 
 # TODO: All specified tiffs should be put into one final pdf. One program run => One pdf output.
 # TODO: Update image preview to preserve aspect ratio
-# TODO: Make hough enablement the default, with a flag to --disable_hough.
 # TODO: Improve documentation of the deskew function
 # TODO: Update the readme.
+
 
 def parse_arguments() -> argparse.Namespace:
     """Argument parser for user input."""
@@ -48,9 +48,9 @@ def parse_arguments() -> argparse.Namespace:
         help="Enable debug previews of images.",
     )
     parser.add_argument(
-        "--use_hough",
+        "--disable_hough",
         action="store_true",
-        help="Use Hough Line Transform for additional skew detection.",
+        help="Disable Hough Line Transform for additional skew detection.",
     )
     parser.add_argument(
         "--resize_factor",
@@ -84,7 +84,7 @@ def worker_process(
     log_level: str,
     output_dir: str,
     debug: bool = False,
-    use_hough: bool = False,
+    use_hough: bool = True,
     resize_factor: float = 1.0,
 ):
     setup_logging(log_level, os.path.basename(path))
@@ -228,7 +228,7 @@ def rotate_image(image: cv2.typing.MatLike, angle: float) -> cv2.typing.MatLike:
 def deskew_image(
     pil_image: Image.Image,
     use_tesseract: bool = False,
-    use_hough: bool = False,
+    use_hough: bool = True,
     debug: bool = False,
 ) -> Image.Image:
     """
@@ -325,7 +325,6 @@ def deskew_image(
 
         # Draw all detected contours in red for debugging
     if debug:
-        debug_image = cv2_image.copy()
         cv2.drawContours(debug_image, filtered_contours, -1, (255, 0, 0), 2)  # Blue BGR
 
     # Combine all filtered contours into one array of points
@@ -370,7 +369,7 @@ def deskew_image(
         if debug and lines is not None:
             for line in lines:
                 x1, y1, x2, y2 = line[0]
-                cv2.line(debug_image, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                cv2.line(debug_image, (x1, y1), (x2, y2), (0, 255, 255), 2)  # Yellow
             debug_show_image(debug_image)
 
         if lines is not None:
@@ -511,7 +510,7 @@ def main():
                 args.log,
                 args.output_dir,
                 args.debug,
-                args.use_hough,
+                not args.disable_hough,
                 args.resize_factor,
             )
             for path in args.image_paths
