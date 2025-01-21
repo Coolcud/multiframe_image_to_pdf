@@ -9,18 +9,15 @@ from typing import List
 import cv2
 import numpy as np
 import pytesseract
-from PIL import Image, ImageOps
+from PIL import Image
 from pytesseract import Output
 from tqdm import tqdm
 
 # TODO: All specified tiffs should be put into one final pdf. One program run => One pdf output.
-# TODO: Keep debug image preview functionality, but lock it behind a command-line flag.
 # TODO: Update image preview to preserve aspect ratio
 # TODO: Make hough enablement the default, with a flag to --disable_hough.
 # TODO: Improve documentation of the deskew function
 # TODO: Update the readme.
-# TODO: Review command-line flags, which ones should be removed?
-
 
 def parse_arguments() -> argparse.Namespace:
     """Argument parser for user input."""
@@ -46,9 +43,9 @@ def parse_arguments() -> argparse.Namespace:
         help="Set the logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) Default is INFO.",
     )
     parser.add_argument(
-        "--invert",
+        "--debug",
         action="store_true",
-        help="Invert the image colors (optional).",
+        help="Enable debug previews of images.",
     )
     parser.add_argument(
         "--use_hough",
@@ -86,14 +83,14 @@ def worker_process(
     path: str,
     log_level: str,
     output_dir: str,
-    invert: bool = False,
+    debug: bool = False,
     use_hough: bool = False,
     resize_factor: float = 1.0,
 ):
     setup_logging(log_level, os.path.basename(path))
     logging.info("New worker started.")
 
-    convert_single_image(path, output_dir, invert, True, use_hough, resize_factor)
+    convert_single_image(path, output_dir, debug, True, use_hough, resize_factor)
 
 
 def get_tesseract_path() -> str:
@@ -232,6 +229,7 @@ def deskew_image(
     pil_image: Image.Image,
     use_tesseract: bool = False,
     use_hough: bool = False,
+    debug: bool = False,
 ) -> Image.Image:
     """
     Deskew input PIL.Image object with OpenCV.
@@ -263,7 +261,8 @@ def deskew_image(
         tesseract_angle = get_skew_angle_tesseract(pil_image)
         if tesseract_angle is not None:
             cv2_image = cv2.rotate(cv2_image, tesseract_angle)
-            debug_show_image(cv2_image)
+            if debug:
+                debug_show_image(cv2_image)
 
     # Convert to grayscale to simplify the image to one color channel
     # Grayscale images are easier/faster to process, especially for
@@ -305,10 +304,10 @@ def deskew_image(
         logging.warning("No contours found. Returning original image...")
         return pil_image
 
-    drawing_image = cv2_image.copy()
     # Draw all detected contours in red for debugging
-    # cv2.drawContours(drawing_image, contours, -1, (0, 0, 255), 2)  # Red in RGB
-    # debug_show_image(drawing_image)
+    if debug:
+        debug_image = cv2_image.copy()
+        cv2.drawContours(debug_image, contours, -1, (0, 0, 255), 2)  # Red in BGR
 
     # -------------------------------------------------------------------------
 
@@ -324,6 +323,11 @@ def deskew_image(
         logging.warning("No large enough contours found. Returning original...")
         return pil_image
 
+        # Draw all detected contours in red for debugging
+    if debug:
+        debug_image = cv2_image.copy()
+        cv2.drawContours(debug_image, filtered_contours, -1, (255, 0, 0), 2)  # Blue BGR
+
     # Combine all filtered contours into one array of points
     all_contours = np.vstack(filtered_contours)
 
@@ -331,11 +335,12 @@ def deskew_image(
     encompassing_rect = cv2.minAreaRect(all_contours)
     box = cv2.boxPoints(encompassing_rect)
     box = np.int_(box)  # Convert to integer coordinates
+    angle = encompassing_rect[-1]
 
     # Draw the encompassing bounding rectangle in green
-    cv2.drawContours(drawing_image, [box], 0, (0, 255, 0), 2)  # Green in RGB
-    angle = encompassing_rect[-1]
-    debug_show_image(drawing_image)
+    if debug:
+        cv2.drawContours(debug_image, [box], 0, (0, 255, 0), 2)  # Green in RGB
+        debug_show_image(debug_image)
 
     # -------------------------------------------------------------------------
 
@@ -362,11 +367,11 @@ def deskew_image(
         )
 
         # Draw the detected lines on the original image
-        if lines is not None:
+        if debug and lines is not None:
             for line in lines:
                 x1, y1, x2, y2 = line[0]
-                cv2.line(drawing_image, (x1, y1), (x2, y2), (0, 0, 255), 2)
-            debug_show_image(drawing_image)
+                cv2.line(debug_image, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            debug_show_image(debug_image)
 
         if lines is not None:
             angles = []
@@ -382,9 +387,10 @@ def deskew_image(
     # Rotate the image to correct the skew
     deskewed = rotate_image(cv2_image, angle)
 
-    drawing_image = deskewed.copy()
-    cv2.drawContours(drawing_image, [box], 0, (0, 255, 0), 2)  # Green in RGB
-    debug_show_image(drawing_image)
+    if debug:
+        debug_image = deskewed.copy()
+        cv2.drawContours(debug_image, [box], 0, (0, 255, 0), 2)  # Green in BGR
+        debug_show_image(debug_image)
 
     # Use Tesseract OCR for angle detection.
     # Tesseract OCR is not capable of giving very miniscule angle detections,
@@ -394,7 +400,8 @@ def deskew_image(
         tesseract_angle = get_skew_angle_tesseract(pil_image)
         if tesseract_angle is not None:
             deskewed = cv2.rotate(deskewed, tesseract_angle)
-            debug_show_image(deskewed)
+            if debug:
+                debug_show_image(deskewed)
 
     # --------------------------------------------------
     # 4. FINAL PIL: convert, return
@@ -445,7 +452,7 @@ def save_pil_images_as_pdf(
 def convert_single_image(
     image_path: str,
     output_dir: str,
-    invert: bool,
+    debug: bool,
     use_tesseract: bool,
     use_hough: bool,
     resize_factor: float = 1.0,
@@ -469,10 +476,6 @@ def convert_single_image(
         logging.warning(f"No pages found in {image_path}. Skipping...")
         return
 
-    # Optionally invert images
-    if invert:
-        pages = [ImageOps.invert(p.convert("RGB")) for p in pages]
-
     # Optionally log image info for debugging
     for page in pages:
         log_image_info(page)
@@ -480,7 +483,7 @@ def convert_single_image(
     # Deskew each page
     deskewed_pages = []
     for page in pages:
-        deskewed = deskew_image(page, use_tesseract=use_tesseract, use_hough=use_hough)
+        deskewed = deskew_image(page, use_tesseract, use_hough, debug=debug)
         deskewed_pages.append(deskewed)
         logging.info(f"Finished deskewing image {len(deskewed_pages)}/{len(pages)}")
 
@@ -507,7 +510,7 @@ def main():
                 path,
                 args.log,
                 args.output_dir,
-                args.invert,
+                args.debug,
                 args.use_hough,
                 args.resize_factor,
             )
