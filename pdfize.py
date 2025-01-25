@@ -2,6 +2,8 @@ import argparse
 import logging
 import logging.handlers
 import os
+import time
+import traceback
 import sys
 from multiprocessing import Pool, cpu_count
 from typing import List
@@ -61,7 +63,7 @@ def setup_logging(log_level: str, name: str = None):
 
     try:
         format = "[%(asctime)s|%(levelname)s]: %(message)s"
-        if str is not None:
+        if name is not None:
             format = f"[%(asctime)s|%(levelname)s|{name}]: %(message)s"
 
         logging.basicConfig(
@@ -115,7 +117,7 @@ def read_multiframe_image(file_path: str) -> List[Image.Image]:
     except EOFError:
         pass
 
-    logging.info(f"Extracted {len(extracted_images)} image frames.")
+    logging.info(f"Extracted {len(extracted_images)} image frames from '{file_path}'.")
     return extracted_images
 
 
@@ -164,7 +166,7 @@ def get_skew_angle_tesseract(pil_image: Image.Image) -> float:
 
         return angle
     except Exception as e:
-        logging.error(f"Tesseract OCR failed to detect angle: {e}")
+        logging.error(f"Tesseract OCR failed to detect angle: {e}\n{traceback.format_exc()}")
         return None
 
 
@@ -179,7 +181,7 @@ def has_enough_text(pil_image: Image.Image, min_words=3) -> bool:
         words = [w.strip() for w in data["text"] if w.strip() != ""]
         return len(words) >= min_words
     except Exception as e:
-        logging.error(f"{e}")
+        logging.error(f"{e}\n{traceback.format_exc()}")
         return False
 
 
@@ -442,7 +444,7 @@ def save_pil_images_as_pdf(
         logging.info("Saved PDF! 🎉🎉")
         logging.info(output_pdf_path)
     except Exception as e:
-        logging.error(f"Failed to save PDF {output_pdf_path}: {e}")
+        logging.error(f"Failed to save PDF {output_pdf_path}: {e}\n{traceback.format_exc()}")
 
 
 def extract_all_images(image_paths: List[str]):
@@ -493,6 +495,7 @@ def main():
             sys.exit(1)
 
     images_to_process = extract_all_images(args.image_paths)
+    output_pdf_path = os.path.join(output_dir, output_pdf_name)
     logging.info(f"Output PDF: '{output_pdf_name}'")
     logging.info(f"Image Files: {len(args.image_paths)}")
     logging.info(f"Image Frames: {len(images_to_process)}")
@@ -514,9 +517,18 @@ def main():
             )
             for image in images_to_process
         ]
-        resulting_pdf_pages = pool.starmap(worker_process, process_args)
+		
+        result = pool.starmap_async(worker_process, process_args)
+        while not result.ready():
+            time.sleep(1)
+        
+        if not result.successful():
+            logging.info("Cancelled.")
+            sys.exit(1)
+        
+        resulting_pdf_pages = result.get()
+        # resulting_pdf_pages = pool.starmap_async(worker_process, process_args)
 
-    output_pdf_path = os.path.join(output_dir, output_pdf_name)
     save_pil_images_as_pdf(resulting_pdf_pages, output_pdf_path, args.resize_factor)
 
 
