@@ -1,4 +1,5 @@
 import argparse
+import io
 import logging
 import logging.handlers
 import os
@@ -7,6 +8,7 @@ import traceback
 import sys
 from multiprocessing import Pool, cpu_count
 from typing import List
+from wand.image import Image as WandImage
 
 import cv2
 import numpy as np
@@ -90,8 +92,12 @@ def worker_process(
 ):
     setup_logging(log_level, name)
 
-    deskewed = deskew_image(image, True, use_hough, debug=debug)
-    logging.info("Finished deskewing image.")
+    try:
+        deskewed = deskew_image2(image, True, use_hough, debug=debug)
+        deskewed = deskew_image(deskewed, False, use_hough, debug=debug)
+        logging.info("Finished deskewing image.")
+    except Exception as e:
+        logging.error(f"{e}\n{traceback.format_exc()}")
 
     return deskewed
 
@@ -228,6 +234,59 @@ def rotate_image(image: cv2.typing.MatLike, angle: float) -> cv2.typing.MatLike:
     )
 
 
+def apply_tesseract_pil(
+    image: Image.Image,
+    debug: bool = False,
+) -> cv2.typing.MatLike:
+    cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    cv_image = apply_tesseract(image, cv_image, debug)
+    return Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB))
+
+
+def apply_tesseract(
+    pil_image: Image.Image,
+	target_image: cv2.typing.MatLike,
+    debug: bool = False,
+) -> cv2.typing.MatLike:
+    tesseract_angle = get_skew_angle_tesseract(pil_image)
+    if tesseract_angle is not None:
+        target_image = cv2.rotate(target_image, tesseract_angle)
+        if debug:
+            debug_show_image(target_image)
+    
+    return target_image
+
+
+def deskew_image2(
+    pil_image: Image.Image,
+    use_tesseract: bool = False,
+    use_hough: bool = True,
+    debug: bool = False,
+) -> Image.Image:
+    """
+    Deskew input PIL.Image object with OpenCV.
+    Return a new PIL.Image object with the correct skew.
+    """
+    
+    if use_tesseract:
+        pil_image = apply_tesseract_pil(pil_image, debug)
+    
+    # Convert PIL Image to bytes
+    with io.BytesIO() as output:
+        pil_image.save(output, format='PNG')  # Save as PNG or any other format
+        image_data = output.getvalue()
+    
+    wand_image = WandImage(blob=image_data)
+    result = wand_image.deskew(1) # 1 works better only if tesseract is used first, otherwise .99 can be used to avoid unintentional rotation.
+    if not result:
+        return pil_image
+
+    pil_image = Image.open(io.BytesIO(wand_image.make_blob("png")))
+    if debug:
+        debug_show_image(cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR))
+    return pil_image
+
+
 def deskew_image(
     pil_image: Image.Image,
     use_tesseract: bool = False,
@@ -261,11 +320,7 @@ def deskew_image(
     # So, we will use it to ensure any text we find is correctly oriented.
     # Hough lines works significantly better if we perform this first.
     if use_tesseract and use_hough:
-        tesseract_angle = get_skew_angle_tesseract(pil_image)
-        if tesseract_angle is not None:
-            cv2_image = cv2.rotate(cv2_image, tesseract_angle)
-            if debug:
-                debug_show_image(cv2_image)
+        cv2_image = apply_tesseract(pil_image, cv2_image, debug)
 
     # Convert to grayscale to simplify the image to one color channel
     # Grayscale images are easier/faster to process, especially for
@@ -385,9 +440,13 @@ def deskew_image(
                 angles.append(current_angle)
             if angles:
                 angle = np.median(angles)
+                logging.info(f"Hough Angle: {angle}, {len(angles)}, {angles.count(np.float64(0))}")
 
     # Rotate the image to correct the skew
-    deskewed = rotate_image(cv2_image, angle)
+    if angle != 0 and abs(angle) <= 50:
+        deskewed = rotate_image(cv2_image, angle)
+    else:
+        deskewed = cv2_image.copy()
 
     if debug:
         debug_image = deskewed.copy()
@@ -399,11 +458,7 @@ def deskew_image(
     # but it's good at giving 90 degree intervals.
     # So, we will use it to ensure any text we find is correctly oriented.
     if use_tesseract and not use_hough:
-        tesseract_angle = get_skew_angle_tesseract(pil_image)
-        if tesseract_angle is not None:
-            deskewed = cv2.rotate(deskewed, tesseract_angle)
-            if debug:
-                debug_show_image(deskewed)
+        deskewed = apply_tesseract(pil_image, deskewed, debug)
 
     # --------------------------------------------------
     # 4. FINAL PIL: convert, return
