@@ -44,6 +44,11 @@ def parse_arguments() -> argparse.Namespace:
         help="Enable debug previews of images.",
     )
     parser.add_argument(
+        "--disable_deskew",
+        action="store_true",
+        help="Disable Deskewing",
+    )
+    parser.add_argument(
         "--disable_hough",
         action="store_true",
         help="Disable Hough Line Transform for additional skew detection.",
@@ -499,9 +504,13 @@ def main():
     logging.info(f"Output PDF: '{output_pdf_name}'")
     logging.info(f"Image Files: {len(args.image_paths)}")
     logging.info(f"Image Frames: {len(images_to_process)}")
-    logging.info("Starting conversion process.")
+
+    if args.disable_deskew:
+        save_pil_images_as_pdf([tuple[2] for tuple in images_to_process], output_pdf_path, args.resize_factor)
+        sys.exit(0)
 
     # Use multiprocessing for parallel processing.
+    logging.info("Starting conversion process.")
     process_count = min(len(images_to_process), cpu_count())
     if args.debug:  # Make debugging easier.
         process_count = 1
