@@ -99,6 +99,10 @@ def worker_process(
     except Exception as e:
         logging.error(f"{e}\n{traceback.format_exc()}")
 
+    # Ensure the DPI is kept, if it is known.
+    if image is not deskewed and "dpi" in image.info:
+        deskewed.info["dpi"] = image.info["dpi"]
+    
     return deskewed
 
 
@@ -470,6 +474,12 @@ def deskew_image(
     return deskewed_pil
 
 
+def get_dpi(pil_image: Image.Image):
+    if pil_image is None or not "dpi" in pil_image.info:
+        return None
+    
+    return pil_image.info["dpi"]
+
 def save_pil_images_as_pdf(
     pil_images: List[Image.Image],
     output_pdf_path: str,
@@ -482,9 +492,6 @@ def save_pil_images_as_pdf(
         return
 
     try:
-        # Convert images to RGB
-        pil_images = [p.convert("RGB") for p in pil_images]
-
         # Resize images to reduce PDF size
         # TODO: May remove this if it affects quality significantly
         if resize_factor != 1.0:
@@ -499,9 +506,31 @@ def save_pil_images_as_pdf(
                 for p in pil_images
             ]
 
+        # Write groups together based on DPI match,
+        # since the Pillow library only supports writing PDFs with one DPI setting at a time.
+        i = 0
+        write_count = 0
+        while i < len(pil_images):
+            image = pil_images[i]
+            dpi = get_dpi(image)
+            i += 1
+
+            # Find other images to group/write together.
+            append_images = []
+            while i < len(pil_images):
+                test_image = pil_images[i]
+                if get_dpi(test_image) != dpi:
+                    break
+
+                append_images.append(test_image)
+                i += 1
+            
+            image.save(output_pdf_path, append=(write_count > 0), save_all=True, append_images=append_images, dpi=dpi)
+            write_count += 1
+
         # Save first image and append the rest
-        pil_images[0].save(output_pdf_path, save_all=True, append_images=pil_images[1:])
-        logging.info("Saved PDF! 🎉🎉")
+        suffix = "" if write_count == 1 else "s"
+        logging.info(f"Saved PDF in {write_count} group{suffix}! 🎉🎉")
         logging.info(output_pdf_path)
     except Exception as e:
         logging.error(f"Failed to save PDF {output_pdf_path}: {e}\n{traceback.format_exc()}")
