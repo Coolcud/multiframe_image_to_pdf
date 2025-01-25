@@ -434,7 +434,7 @@ def save_pil_images_as_pdf(
                         int(p.width * resize_factor),
                         int(p.height * resize_factor),
                     ),
-                    Image.ANTIALIAS,
+                    Image.Resampling.LANCZOS,
                 )
                 for p in pil_images
             ]
