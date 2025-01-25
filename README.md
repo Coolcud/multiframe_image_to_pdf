@@ -27,3 +27,10 @@ Download [here](https://github.com/tesseract-ocr/tessdata/blob/main/lat.trainedd
 # Execute program
 
 `python pdfize.py <output_pdf_dir> <image_path1> [<image_path2> ...] [options]`
+
+# Batch convert all tifs in folder (Windows/Batch Only)
+
+```batch
+SET INPUT_PATH=G:\Scans\TifFolder
+for /f %f in ('dir /b "%INPUT_PATH%" ^| findstr /i .tif') do python pdfize.py "%INPUT_PATH%" "%INPUT_PATH%\%f"
+```

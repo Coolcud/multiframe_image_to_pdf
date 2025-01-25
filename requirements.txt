@@ -3,3 +3,4 @@ opencv-python>=4.5.0
 numpy>=1.19.0
 pytesseract>=0.3.0
 tqdm>=4.0.0
+Wand>=0.6.13
